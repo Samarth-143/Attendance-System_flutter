@@ -16,6 +16,7 @@ class _EnrollScreenState extends State<EnrollScreen> {
   final FaceService _faceService = FaceService();
   final DatabaseService _databaseService = DatabaseService();
   final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _contractorController = TextEditingController();
   bool _isProcessing = false;
   String _message = '';
   bool _faceDetected = false;
@@ -113,6 +114,7 @@ class _EnrollScreenState extends State<EnrollScreen> {
   void dispose() {
     _cameraController?.dispose();
     _nameController.dispose();
+    _contractorController.dispose();
     super.dispose();
   }
 
@@ -172,6 +174,15 @@ class _EnrollScreenState extends State<EnrollScreen> {
                         onChanged: (value) {
                           setState(() => _selectedRole = value!);
                         },
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _contractorController,
+                        decoration: const InputDecoration(
+                          labelText: 'Contractor (Optional)',
+                          border: OutlineInputBorder(),
+                          hintText: 'Enter contractor name',
+                        ),
                       ),
                       const SizedBox(height: 10),
                       if (_message.isNotEmpty)
