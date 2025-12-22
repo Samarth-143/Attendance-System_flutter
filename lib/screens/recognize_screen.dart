@@ -19,6 +19,7 @@ class _RecognizeScreenState extends State<RecognizeScreen> {
   String _message = '';
   String _recognizedName = '';
   String _accuracyScore = '';
+  String _embeddingMethod = '';
   List<CameraDescription> _cameras = [];
   bool _isFrontCamera = true;
 
@@ -59,6 +60,9 @@ class _RecognizeScreenState extends State<RecognizeScreen> {
     setState(() {
       _isProcessing = true;
       _message = 'Recognizing...';
+      _recognizedName = '';
+      _accuracyScore = '';
+      _embeddingMethod = '';
     });
 
     try {
@@ -113,12 +117,16 @@ class _RecognizeScreenState extends State<RecognizeScreen> {
           setState(() {
             _recognizedName = name;
             _accuracyScore = '$accuracy% ($confidenceLabel)';
+            _embeddingMethod = _faceService.faceEmbedder.isUsingDeepLearning 
+                ? '🧠 Deep Learning' 
+                : '⚙️ Feature Extraction';
             _message = 'Recognized: $name ($role - $shift Shift)\nAccuracy: $_accuracyScore\n$statusMessage';
           });
         } else {
           setState(() {
             _recognizedName = '';
             _accuracyScore = '';
+            _embeddingMethod = '';
             _message = 'Face not recognized';
           });
         }
@@ -195,6 +203,16 @@ class _RecognizeScreenState extends State<RecognizeScreen> {
                                       ),
                                     ),
                                   ),
+                                  if (_embeddingMethod.isNotEmpty) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      _embeddingMethod,
+                                      style: const TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ],
                                 ],
                               ],
                             ),

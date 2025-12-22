@@ -7,6 +7,9 @@ import '../utils/face_quality_checker.dart';
 class FaceService {
   late FaceDetector _faceDetector;
   late FaceEmbedder _faceEmbedder;
+  
+  // Public getter to access embedder
+  FaceEmbedder get faceEmbedder => _faceEmbedder;
 
   Future<void> initialize() async {
     _faceDetector = FaceDetector(

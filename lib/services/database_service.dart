@@ -12,7 +12,7 @@ class DatabaseService {
 
     _database = await openDatabase(
       path,
-      version: 7, // Updated to add leave_type column
+      version: 8, // Updated for MobileFaceNet 192D embeddings
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE faces (
@@ -74,6 +74,11 @@ class DatabaseService {
         if (oldVersion < 7) {
           // Add leave_type column for SL/CL marking
           await db.execute('ALTER TABLE attendance ADD COLUMN leave_type TEXT');
+        }
+        if (oldVersion < 8) {
+          // Clear old embeddings - switching to MobileFaceNet 192D
+          await db.execute('DELETE FROM faces');
+          print('Switched to MobileFaceNet - please re-enroll all faces for best accuracy');
         }
       },
     );

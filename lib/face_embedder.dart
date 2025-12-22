@@ -1,17 +1,85 @@
 import 'dart:typed_data';
 import 'package:image/image.dart' as img;
 import 'dart:math';
+import 'package:tflite_flutter/tflite_flutter.dart';
+import 'package:flutter/services.dart';
 
 class FaceEmbedder {
-  static const int embeddingSize = 256; // Increased from 128
+  static const int embeddingSize = 192; // MobileFaceNet outputs 192D embeddings
+  Interpreter? _interpreter;
+  bool _useDeepLearning = false;
+  
+  // Public getter to check if deep learning is active
+  bool get isUsingDeepLearning => _useDeepLearning;
 
   Future<void> loadModel() async {
-    // Enhanced landmark-based approach
-    print('Using enhanced facial feature embeddings');
+    try {
+      print('Attempting to load MobileFaceNet TFLite model...');
+      _interpreter = await Interpreter.fromAsset('assets/models/mobilefacenet.tflite');
+      _useDeepLearning = true;
+      print('✓ MobileFaceNet model loaded successfully! Using deep learning embeddings.');
+    } catch (e) {
+      print('⚠ Could not load TFLite model: $e');
+      print('Falling back to enhanced feature extraction method');
+      _useDeepLearning = false;
+    }
   }
 
   List<double>? getEmbedding(img.Image face) {
-    // Multi-scale feature extraction for better accuracy
+    if (_useDeepLearning && _interpreter != null) {
+      return _getDeepLearningEmbedding(face);
+    } else {
+      return _getEnhancedEmbedding(face);
+    }
+  }
+
+  List<double>? _getDeepLearningEmbedding(img.Image face) {
+    try {
+      // MobileFaceNet expects 112x112x3 input
+      final resized = img.copyResize(face, width: 112, height: 112);
+      
+      // Prepare input tensor [1, 112, 112, 3]
+      var input = List.generate(1, (_) => 
+        List.generate(112, (y) =>
+          List.generate(112, (x) {
+            final pixel = resized.getPixel(x, y);
+            return [
+              (pixel.r - 127.5) / 128.0,  // Normalize to [-1, 1]
+              (pixel.g - 127.5) / 128.0,
+              (pixel.b - 127.5) / 128.0,
+            ];
+          })
+        )
+      );
+      
+      // Prepare output tensor [1, 192]
+      var output = List.filled(1, List.filled(192, 0.0));
+      
+      // Run inference
+      _interpreter!.run(input, output);
+      
+      // Normalize the embedding
+      List<double> embedding = output[0];
+      double norm = 0;
+      for (var val in embedding) {
+        norm += val * val;
+      }
+      norm = sqrt(norm);
+      
+      if (norm > 0) {
+        embedding = embedding.map((v) => v / norm).toList();
+      }
+      
+      print('✓ Generated 192D deep learning embedding');
+      return embedding;
+    } catch (e) {
+      print('Error in deep learning embedding: $e');
+      return _getEnhancedEmbedding(face);
+    }
+  }
+
+  List<double>? _getEnhancedEmbedding(img.Image face) {
+    // Fallback: Enhanced feature-based embedding
     List<double> embedding = [];
     
     // 1. Extract features at multiple scales (more scales = better accuracy)
@@ -113,6 +181,6 @@ class FaceEmbedder {
   }
 
   void dispose() {
-    // Nothing to dispose
+    _interpreter?.close();
   }
 }

@@ -53,15 +53,25 @@ class EmailService {
         ..from = Address(gmailEmail)
         ..recipients.add(recipientEmail)
         ..subject = subject
-        ..text = body
-        ..attachments = [FileAttachment(File(csvPath))];
+        ..text = body;
+      
+      // Add attachment only if path is provided
+      if (csvPath.isNotEmpty) {
+        message.attachments = [FileAttachment(File(csvPath))];
+      }
 
       // Send the email
       final sendReport = await send(message, smtpServer);
-      print('Email sent: ${sendReport.toString()}');
+      print('✓ Email sent successfully: ${sendReport.toString()}');
       return true;
+    } on MailerException catch (e) {
+      print('✗ MailerException: ${e.message}');
+      for (var p in e.problems) {
+        print('Problem: ${p.code}: ${p.msg}');
+      }
+      return false;
     } catch (e) {
-      print('Error sending email: $e');
+      print('✗ Error sending email: $e');
       return false;
     }
   }
