@@ -4,7 +4,7 @@ import 'dart:math';
 
 class DatabaseService {
   Database? _database;
-  static const double similarityThreshold = 0.75; // Increased from 0.7
+  static const double similarityThreshold = 0.82; // Increased for better accuracy
 
   Future<void> initialize() async {
     final databasePath = await getDatabasesPath();

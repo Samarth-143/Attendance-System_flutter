@@ -14,8 +14,8 @@ class FaceEmbedder {
     // Multi-scale feature extraction for better accuracy
     List<double> embedding = [];
     
-    // 1. Extract features at multiple scales
-    final scales = [32, 48, 64];
+    // 1. Extract features at multiple scales (more scales = better accuracy)
+    final scales = [24, 32, 48, 64, 80];
     for (var size in scales) {
       final resized = img.copyResize(face, width: size, height: size);
       embedding.addAll(_extractLocalFeatures(resized, size));

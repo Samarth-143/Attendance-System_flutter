@@ -78,11 +78,21 @@ class FaceQualityChecker {
       if (offsetY > 0.2) issues.add('Center face vertically');
     }
     
+    // 7. Check for blur using edge detection
+    final blurScore = _calculateBlurScore(image, face.boundingBox);
+    if (blurScore < 0.3) {
+      score -= 0.3;
+      issues.add('Image too blurry (focus needed)');
+    } else if (blurScore < 0.5) {
+      score -= 0.15;
+      issues.add('Image slightly blurry');
+    }
+    
     score = max(0.0, min(1.0, score));
     
     return FaceQuality(
       score: score,
-      isGoodQuality: score >= 0.7,
+      isGoodQuality: score >= 0.8, // Stricter quality requirement
       issues: issues,
     );
   }
@@ -109,6 +119,46 @@ class FaceQualityChecker {
     }
     
     return pixelCount > 0 ? totalBrightness / pixelCount : 0.5;
+  }
+  
+  /// Calculate blur score using Laplacian variance (edge detection)
+  /// Higher score = sharper image, Lower score = blurrier image
+  static double _calculateBlurScore(img.Image image, Rect boundingBox) {
+    int startX = max(0, boundingBox.left.toInt());
+    int startY = max(0, boundingBox.top.toInt());
+    int endX = min(image.width, boundingBox.right.toInt());
+    int endY = min(image.height, boundingBox.bottom.toInt());
+    
+    double laplacianSum = 0;
+    int count = 0;
+    
+    // Apply Laplacian operator (simplified edge detection)
+    for (int y = startY + 1; y < endY - 1; y += 3) {
+      for (int x = startX + 1; x < endX - 1; x += 3) {
+        final center = image.getPixel(x, y);
+        final top = image.getPixel(x, y - 1);
+        final bottom = image.getPixel(x, y + 1);
+        final left = image.getPixel(x - 1, y);
+        final right = image.getPixel(x + 1, y);
+        
+        // Convert to grayscale for edge calculation
+        final centerGray = 0.299 * center.r + 0.587 * center.g + 0.114 * center.b;
+        final topGray = 0.299 * top.r + 0.587 * top.g + 0.114 * top.b;
+        final bottomGray = 0.299 * bottom.r + 0.587 * bottom.g + 0.114 * bottom.b;
+        final leftGray = 0.299 * left.r + 0.587 * left.g + 0.114 * left.b;
+        final rightGray = 0.299 * right.r + 0.587 * right.g + 0.114 * right.b;
+        
+        // Laplacian = 4*center - (top + bottom + left + right)
+        final laplacian = (4 * centerGray - topGray - bottomGray - leftGray - rightGray).abs();
+        laplacianSum += laplacian;
+        count++;
+      }
+    }
+    
+    // Normalize: typical sharp images have variance around 100-500
+    // Blurry images have variance < 50
+    final variance = count > 0 ? laplacianSum / count : 0;
+    return min(1.0, variance / 150); // Normalize to 0-1 scale
   }
 }
 
