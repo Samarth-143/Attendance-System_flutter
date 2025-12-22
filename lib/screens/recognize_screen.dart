@@ -18,6 +18,9 @@ class _RecognizeScreenState extends State<RecognizeScreen> {
   bool _isProcessing = false;
   String _message = '';
   String _recognizedName = '';
+  String _accuracyScore = '';
+  List<CameraDescription> _cameras = [];
+  bool _isFrontCamera = true;
 
   @override
   void initState() {
@@ -28,20 +31,28 @@ class _RecognizeScreenState extends State<RecognizeScreen> {
   }
 
   Future<void> _initializeCamera() async {
-    final cameras = await availableCameras();
-    final frontCamera = cameras.firstWhere(
-      (camera) => camera.lensDirection == CameraLensDirection.front,
-      orElse: () => cameras.first,
+    _cameras = await availableCameras();
+    final camera = _cameras.firstWhere(
+      (camera) => camera.lensDirection == (_isFrontCamera ? CameraLensDirection.front : CameraLensDirection.back),
+      orElse: () => _cameras.first,
     );
 
     _cameraController = CameraController(
-      frontCamera,
+      camera,
       ResolutionPreset.medium,
       enableAudio: false,
     );
 
     await _cameraController!.initialize();
-    setState(() {});
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _toggleCamera() async {
+    if (_isProcessing) return;
+    
+    setState(() => _isFrontCamera = !_isFrontCamera);
+    await _cameraController?.dispose();
+    await _initializeCamera();
   }
 
   Future<void> _recognizeFace() async {
@@ -59,17 +70,55 @@ class _RecognizeScreenState extends State<RecognizeScreen> {
       if (embedding != null) {
         final match = await _databaseService.findMatch(embedding);
         
-        if (match != null) {
-          final name = match['name']!;
-          final role = match['role']!;
+        if (match != null && match['name'] != null && match['role'] != null) {
+          final name = match['name'] as String;
+          final role = match['role'] as String;
+          final shift = match['shift'] ?? 'Day';
+          final accuracy = match['accuracy'] as String? ?? '0.0';
+          final confidence = match['confidence'] as double? ?? 0.0;
+          
+          // Color based on confidence
+          Color confidenceColor;
+          String confidenceLabel;
+          if (confidence >= 0.9) {
+            confidenceColor = Colors.green;
+            confidenceLabel = 'Excellent';
+          } else if (confidence >= 0.85) {
+            confidenceColor = Colors.lightGreen;
+            confidenceLabel = 'Very Good';
+          } else if (confidence >= 0.80) {
+            confidenceColor = Colors.orange;
+            confidenceLabel = 'Good';
+          } else {
+            confidenceColor = Colors.deepOrange;
+            confidenceLabel = 'Fair';
+          }
+          
+          // Record attendance and check status
+          final attendanceStatus = await _databaseService.recordAttendance(name, role);
+          
+          String statusMessage;
+          if (attendanceStatus == 'IN') {
+            statusMessage = '✓ IN Time Marked';
+          } else if (attendanceStatus == 'OUT') {
+            statusMessage = '✓ OUT Time Marked';
+          } else if (attendanceStatus == 'IN_ALREADY_MARKED') {
+            statusMessage = '⚠ IN Time Already Marked Today';
+          } else if (attendanceStatus == 'OUT_ALREADY_MARKED') {
+            statusMessage = '⚠ OUT Time Already Marked Today';
+          } else {
+            statusMessage = '⚠ Attendance Error';
+          }
+          
           setState(() {
             _recognizedName = name;
-            _message = 'Recognized: $name ($role)';
+            _accuracyScore = '$accuracy% ($confidenceLabel)';
+            _message = 'Recognized: $name ($role - $shift Shift)\nAccuracy: $_accuracyScore\n$statusMessage';
           });
-          await _databaseService.recordAttendance(name, role);
         } else {
           setState(() {
             _recognizedName = '';
+            _accuracyScore = '';
             _message = 'Face not recognized';
           });
         }
@@ -115,17 +164,56 @@ class _RecognizeScreenState extends State<RecognizeScreen> {
                               color: Colors.green,
                               borderRadius: BorderRadius.circular(10),
                             ),
-                            child: Text(
-                              'Welcome, $_recognizedName!',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 24,
-                                fontWeight: FontWeight.bold,
-                              ),
-                              textAlign: TextAlign.center,
+                            child: Column(
+                              children: [
+                                Text(
+                                  'Welcome, $_recognizedName!',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                                if (_accuracyScore.isNotEmpty) ...[
+                                  const SizedBox(height: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 6,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withOpacity(0.3),
+                                      borderRadius: BorderRadius.circular(20),
+                                    ),
+                                    child: Text(
+                                      '✓ Match: $_accuracyScore',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
                             ),
                           ),
                         ),
+                      Positioned(
+                        top: 20,
+                        right: 20,
+                        child: FloatingActionButton(
+                          heroTag: 'cameraToggle',
+                          mini: true,
+                          onPressed: _toggleCamera,
+                          backgroundColor: Colors.white.withOpacity(0.8),
+                          child: Icon(
+                            _isFrontCamera ? Icons.camera_front : Icons.camera_rear,
+                            color: Colors.black87,
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),

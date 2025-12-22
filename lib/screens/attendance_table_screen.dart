@@ -19,10 +19,12 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
   final EmailService _emailService = EmailService();
   Map<String, Map<String, List<Map<String, dynamic>>>> _groupedRecords = {};
   Map<String, String?> contractorMap = {};
+  Map<String, String> shiftMap = {};
   bool _isLoading = true;
+  DateTime _selectedDate = DateTime.now();
   
   // Monthly attendance data
-  Map<String, Map<int, bool>> _monthlyAttendanceData = {};
+  Map<String, Map<int, dynamic>> _monthlyAttendanceData = {};
   List<Map<String, dynamic>> _allPeople = [];
   DateTime _selectedMonth = DateTime.now();
   int _daysInMonth = 0;
@@ -59,9 +61,11 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
       final name = face['name'] as String;
       final role = face['role'] as String;
       final contractor = face['contractor'] as String?;
+      final shift = face['shift'] as String? ?? 'Day';
       roleMap[name] = role;
       contractorMap[name] = contractor;
-      allPeople.add({'name': name, 'role': role, 'contractor': contractor});
+      shiftMap[name] = shift;
+      allPeople.add({'name': name, 'role': role, 'contractor': contractor, 'shift': shift});
     }
     
     // Get attendance records
@@ -84,13 +88,16 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
       
       // Add all enrolled people to this date
       for (var person in allPeople) {
-        grouped[dateKey]![person['role']]!.add({
-          'name': person['name'],
-          'contractor': person['contractor'],
-          'inTime': null,
-          'outTime': null,
-          'timestamps': <DateTime>[],
-        });
+        final role = person['role'] as String?;
+        if (role != null && grouped[dateKey]?[role] != null) {
+          grouped[dateKey]![role]!.add({
+            'name': person['name'],
+            'contractor': person['contractor'],
+            'inTime': null,
+            'outTime': null,
+            'timestamps': <DateTime>[],
+          });
+        }
       }
     }
     
@@ -101,9 +108,10 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
       final timestamp = DateTime.parse(record['timestamp'] as String);
       final dateKey = '${timestamp.year}-${timestamp.month.toString().padLeft(2, '0')}-${timestamp.day.toString().padLeft(2, '0')}';
       
-      if (grouped.containsKey(dateKey) && grouped[dateKey]!.containsKey(role)) {
+      if (grouped.containsKey(dateKey) && grouped[dateKey]?.containsKey(role) == true) {
         // Find the person entry
-        var personEntry = grouped[dateKey]![role]!.firstWhere(
+        final roleList = grouped[dateKey]![role]!;
+        var personEntry = roleList.firstWhere(
           (entry) => entry['name'] == name,
           orElse: () => {'name': name, 'contractor': contractorMap[name], 'inTime': null, 'outTime': null, 'timestamps': <DateTime>[]}
         );
@@ -119,9 +127,12 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
           List<DateTime> timestamps = person['timestamps'];
           if (timestamps.isNotEmpty) {
             timestamps.sort();
+            final personName = person['name'] as String;
+            final shift = shiftMap[personName] ?? 'Day';
+            final threshold = shift == 'Night' ? 22 : 16; // 10 PM for night, 4 PM for day
             
             for (var time in timestamps) {
-              if (time.hour < 16) {
+              if (time.hour < threshold) {
                 if (person['inTime'] == null || time.isBefore(person['inTime'])) {
                   person['inTime'] = time;
                 }
@@ -154,8 +165,8 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
     // Calculate days in selected month
     _daysInMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1, 0).day;
 
-    // Initialize attendance map
-    Map<String, Map<int, bool>> attendanceMap = {};
+    // Initialize attendance map - now stores status: true/false/'SL'/'CL'
+    Map<String, Map<int, dynamic>> attendanceMap = {};
     for (var person in _allPeople) {
       attendanceMap[person['name']] = {};
       for (int day = 1; day <= _daysInMonth; day++) {
@@ -167,14 +178,24 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
     final records = await _databaseService.getAttendanceRecords();
     
     for (var record in records) {
-      final timestamp = DateTime.parse(record['timestamp'] as String);
-      if (timestamp.year == _selectedMonth.year && 
-          timestamp.month == _selectedMonth.month) {
-        final name = record['name'] as String;
-        final day = timestamp.day;
-        
-        if (attendanceMap.containsKey(name)) {
-          attendanceMap[name]![day] = true;
+      final name = record['name'] as String;
+      final dateStr = record['date'] as String?;
+      final leaveType = record['leave_type'] as String?;
+      
+      if (dateStr != null) {
+        final date = DateTime.parse(dateStr);
+        if (date.year == _selectedMonth.year && 
+            date.month == _selectedMonth.month) {
+          final day = date.day;
+          
+          if (attendanceMap.containsKey(name)) {
+            // If leave is marked, use leave type; otherwise mark as present if in/out time exists
+            if (leaveType != null) {
+              attendanceMap[name]![day] = leaveType; // 'SL' or 'CL'
+            } else if (record['in_time'] != null || record['out_time'] != null) {
+              attendanceMap[name]![day] = true; // Present
+            }
+          }
         }
       }
     }
@@ -191,6 +212,30 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
     _loadMonthlyAttendance();
   }
 
+  void _changeDate(int offset) {
+    setState(() {
+      _selectedDate = DateTime(
+        _selectedDate.year,
+        _selectedDate.month,
+        _selectedDate.day + offset,
+      );
+    });
+  }
+
+  Future<void> _selectDate() async {
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now(),
+    );
+    if (picked != null && picked != _selectedDate) {
+      setState(() {
+        _selectedDate = picked;
+      });
+    }
+  }
+
   String _getMonthYearText() {
     final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     return '${months[_selectedMonth.month - 1]}, ${_selectedMonth.year}';
@@ -202,8 +247,8 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
     final isCurrentMonth = _selectedMonth.year == now.year && _selectedMonth.month == now.month;
     final maxDay = isCurrentMonth ? now.day : _daysInMonth;
     
-    _monthlyAttendanceData[personName]?.forEach((day, present) {
-      if (day <= maxDay && present) total++;
+    _monthlyAttendanceData[personName]?.forEach((day, status) {
+      if (day <= maxDay && status == true) total++;
     });
     return total;
   }
@@ -213,7 +258,17 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
     final isCurrentMonth = _selectedMonth.year == now.year && _selectedMonth.month == now.month;
     final maxDay = isCurrentMonth ? now.day : _daysInMonth;
     final totalPresent = _getTotalPresent(personName);
-    return maxDay - totalPresent;
+    
+    // Count leaves separately from total absent
+    int totalLeaves = 0;
+    _monthlyAttendanceData[personName]?.forEach((day, status) {
+      if (day <= maxDay && (status == 'SL' || status == 'CL')) {
+        totalLeaves++;
+      }
+    });
+    
+    // Absent = total days - present - leaves
+    return maxDay - totalPresent - totalLeaves;
   }
   
   String _getAttendancePercentage(String personName) {
@@ -239,6 +294,12 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
     final days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     return '${days[date.weekday - 1]}, ${months[date.month - 1]} ${parts[2]}, ${parts[0]}';
+  }
+
+  String _formatSelectedDate() {
+    final days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${days[_selectedDate.weekday - 1]}, ${months[_selectedDate.month - 1]} ${_selectedDate.day}, ${_selectedDate.year}';
   }
 
   Future<void> _deleteAttendanceForDate(String dateKey) async {
@@ -303,15 +364,18 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
         rows.add([_formatDate(date)]);
         
         // Add column headers
-        rows.add(['Name', 'Role', 'Contractor', 'In-Time', 'Out-Time']);
+        rows.add(['Name', 'Role', 'Contractor', 'Shift', 'In-Time', 'Out-Time']);
         
         // Add Staff records
         for (var person in roles['Staff']!) {
-          final contractor = contractorMap[person['name']];
+          final personName = person['name'] as String;
+          final contractor = contractorMap[personName];
+          final shift = shiftMap[personName] ?? 'Day';
           rows.add([
-            person['name'],
+            personName,
             'Staff',
             contractor ?? '',
+            shift,
             _formatTime(person['inTime']),
             _formatTime(person['outTime']),
           ]);
@@ -319,11 +383,14 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
         
         // Add Worker records
         for (var person in roles['Worker']!) {
-          final contractor = contractorMap[person['name']];
+          final personName = person['name'] as String;
+          final contractor = contractorMap[personName];
+          final shift = shiftMap[personName] ?? 'Day';
           rows.add([
-            person['name'],
+            personName,
             'Worker',
             contractor ?? '',
+            shift,
             _formatTime(person['inTime']),
             _formatTime(person['outTime']),
           ]);
@@ -402,7 +469,7 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
       rows.add([]);
       
       // Add header
-      List<dynamic> header = ['Person Name', 'Role', 'Contractor'];
+      List<dynamic> header = ['Person Name', 'Role', 'Contractor', 'Shift'];
       for (int day = 1; day <= _daysInMonth; day++) {
         header.add('$day');
       }
@@ -419,15 +486,28 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
         final name = person['name'] as String;
         final role = person['role'] as String;
         final contractor = person['contractor'] as String?;
+        final shift = person['shift'] as String? ?? 'Day';
         final totalPresent = _getTotalPresent(name);
         final totalAbsent = _getTotalAbsent(name);
         final attendancePercentage = _getAttendancePercentage(name);
         
-        List<dynamic> row = [name, role, contractor ?? ''];
+        List<dynamic> row = [name, role, contractor ?? '', shift];
         for (int day = 1; day <= _daysInMonth; day++) {
           final isFutureDate = isCurrentMonth && day > now.day;
-          final hasAttendance = _monthlyAttendanceData[name]?[day] ?? false;
-          row.add(isFutureDate ? '' : (hasAttendance ? 'P' : 'A'));
+          final attendanceStatus = _monthlyAttendanceData[name]?[day];
+          String cellValue;
+          if (isFutureDate) {
+            cellValue = '';
+          } else if (attendanceStatus == true) {
+            cellValue = 'P'; // Present
+          } else if (attendanceStatus == 'SL') {
+            cellValue = 'SL'; // Sick Leave
+          } else if (attendanceStatus == 'CL') {
+            cellValue = 'CL'; // Casual Leave
+          } else {
+            cellValue = 'A'; // Absent
+          }
+          row.add(cellValue);
         }
         row.add(totalPresent);
         row.add(totalAbsent);
@@ -492,21 +572,31 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
         rows.add([_formatDate(date)]);
         
         // Add column headers
-        rows.add(['Name', 'Role', 'In-Time', 'Out-Time']);
+        rows.add(['Name', 'Role', 'Contractor', 'Shift', 'In-Time', 'Out-Time']);
         
         for (var person in roles['Staff']!) {
+          final personName = person['name'] as String;
+          final contractor = contractorMap[personName];
+          final shift = shiftMap[personName] ?? 'Day';
           rows.add([
-            person['name'],
+            personName,
             'Staff',
+            contractor ?? '',
+            shift,
             _formatTime(person['inTime']),
             _formatTime(person['outTime']),
           ]);
         }
         
         for (var person in roles['Worker']!) {
+          final personName = person['name'] as String;
+          final contractor = contractorMap[personName];
+          final shift = shiftMap[personName] ?? 'Day';
           rows.add([
-            person['name'],
+            personName,
             'Worker',
+            contractor ?? '',
+            shift,
             _formatTime(person['inTime']),
             _formatTime(person['outTime']),
           ]);
@@ -578,7 +668,7 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
       rows.add([_getMonthYearText()]);
       rows.add([]);
       
-      List<dynamic> header = ['Person Name', 'Role'];
+      List<dynamic> header = ['Person Name', 'Role', 'Contractor', 'Shift'];
       for (int day = 1; day <= _daysInMonth; day++) {
         header.add('$day');
       }
@@ -589,10 +679,12 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
       for (var person in _allPeople) {
         final name = person['name'] as String;
         final role = person['role'] as String;
+        final contractor = person['contractor'] as String?;
+        final shift = person['shift'] as String? ?? 'Day';
         final totalPresent = _getTotalPresent(name);
         final totalAbsent = _daysInMonth - totalPresent;
         
-        List<dynamic> row = [name, role];
+        List<dynamic> row = [name, role, contractor ?? '', shift];
         for (int day = 1; day <= _daysInMonth; day++) {
           final hasAttendance = _monthlyAttendanceData[name]?[day] ?? false;
           row.add(hasAttendance ? 'P' : 'A');
@@ -656,21 +748,31 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
       for (var date in sortedDates) {
         final roles = _groupedRecords[date]!;
         rows.add([_formatDate(date)]);
-        rows.add(['Name', 'Role', 'In-Time', 'Out-Time']);
+        rows.add(['Name', 'Role', 'Contractor', 'Shift', 'In-Time', 'Out-Time']);
         
         for (var person in roles['Staff']!) {
+          final personName = person['name'] as String;
+          final contractor = contractorMap[personName];
+          final shift = shiftMap[personName] ?? 'Day';
           rows.add([
-            person['name'],
+            personName,
             'Staff',
+            contractor ?? '',
+            shift,
             _formatTime(person['inTime']),
             _formatTime(person['outTime']),
           ]);
         }
         
         for (var person in roles['Worker']!) {
+          final personName = person['name'] as String;
+          final contractor = contractorMap[personName];
+          final shift = shiftMap[personName] ?? 'Day';
           rows.add([
-            person['name'],
+            personName,
             'Worker',
+            contractor ?? '',
+            shift,
             _formatTime(person['inTime']),
             _formatTime(person['outTime']),
           ]);
@@ -691,9 +793,16 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
         directory = await getApplicationDocumentsDirectory();
       }
       
+      if (directory == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Error: Could not access storage directory')),
+        );
+        return;
+      }
+      
       final timestamp = DateTime.now();
       final filename = 'daily_attendance_${timestamp.year}${timestamp.month.toString().padLeft(2, '0')}${timestamp.day.toString().padLeft(2, '0')}.csv';
-      final path = '${directory!.path}/$filename';
+      final path = '${directory.path}/$filename';
       final file = File(path);
       await file.writeAsString(csv);
       
@@ -779,6 +888,12 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
               ),
               DataColumn(
                 label: Text(
+                  'Shift',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+              DataColumn(
+                label: Text(
                   'In-Time',
                   style: TextStyle(fontWeight: FontWeight.bold),
                 ),
@@ -789,11 +904,35 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
                   style: TextStyle(fontWeight: FontWeight.bold),
                 ),
               ),
+              DataColumn(
+                label: Text(
+                  'Action',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
             ],
             rows: people.map((person) {
+              final personName = person['name'] as String;
+              final shift = shiftMap[personName] ?? 'Day';
               return DataRow(cells: [
                 DataCell(Text(person['name'])),
                 DataCell(Text(person['contractor'] ?? '-')),
+                DataCell(
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: shift == 'Day' ? Colors.orange[100] : Colors.indigo[100],
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      shift,
+                      style: TextStyle(
+                        color: shift == 'Day' ? Colors.orange[900] : Colors.indigo[900],
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
                 DataCell(
                   Text(
                     _formatTime(person['inTime']),
@@ -816,6 +955,15 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
                     ),
                   ),
                 ),
+                DataCell(
+                  IconButton(
+                    icon: const Icon(Icons.delete, color: Colors.red, size: 20),
+                    onPressed: () {
+                      final dateKey = '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
+                      _confirmDeleteRecord(personName, dateKey);
+                    },
+                  ),
+                ),
               ]);
             }).toList(),
           ),
@@ -827,11 +975,55 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
 
   @override
   Widget build(BuildContext context) {
+    // Filter records for selected date (daily tab)
+    final selectedDateKey = '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
+    final todayRecords = _groupedRecords[selectedDateKey] ?? {'Staff': [], 'Worker': []};
+    
     final sortedDates = _groupedRecords.keys.toList()..sort((a, b) => b.compareTo(a));
     
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Attendance Records'),
+        title: _tabController.index == 0
+            ? Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.chevron_left),
+                    onPressed: () => _changeDate(-1),
+                    tooltip: 'Previous Day',
+                  ),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: _selectDate,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.calendar_today, size: 18),
+                            const SizedBox(width: 8),
+                            Text(
+                              _formatSelectedDate(),
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.chevron_right),
+                    onPressed: _selectedDate.isBefore(DateTime.now().subtract(const Duration(days: 1)))
+                        ? () => _changeDate(1)
+                        : null,
+                    tooltip: 'Next Day',
+                  ),
+                ],
+              )
+            : const Text('Attendance Records'),
         bottom: TabBar(
           controller: _tabController,
           tabs: const [
@@ -840,19 +1032,19 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
           ],
         ),
         actions: [
-          if (_tabController.index == 0 && _groupedRecords.isNotEmpty)
+          if (_tabController.index == 0 && (((todayRecords['Staff'] as List?)?.isNotEmpty ?? false) || ((todayRecords['Worker'] as List?)?.isNotEmpty ?? false)))
             IconButton(
               icon: const Icon(Icons.send),
               onPressed: _autoSendDailyEmail,
               tooltip: 'Auto-Send Email',
             ),
-          if (_tabController.index == 0 && _groupedRecords.isNotEmpty)
+          if (_tabController.index == 0 && (((todayRecords['Staff'] as List?)?.isNotEmpty ?? false) || ((todayRecords['Worker'] as List?)?.isNotEmpty ?? false)))
             IconButton(
               icon: const Icon(Icons.email),
               onPressed: _emailDailyAttendance,
               tooltip: 'Manual Email (Open Client)',
             ),
-          if (_tabController.index == 0 && _groupedRecords.isNotEmpty)
+          if (_tabController.index == 0 && (((todayRecords['Staff'] as List?)?.isNotEmpty ?? false) || ((todayRecords['Worker'] as List?)?.isNotEmpty ?? false)))
             IconButton(
               icon: const Icon(Icons.download),
               onPressed: _exportToCSV,
@@ -875,6 +1067,27 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
             onPressed: _tabController.index == 0 ? _loadAttendance : _loadMonthlyAttendance,
             tooltip: 'Refresh',
           ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            tooltip: 'More Options',
+            onSelected: (value) {
+              if (value == 'delete_all') {
+                _confirmDeleteAllAttendance();
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'delete_all',
+                child: Row(
+                  children: [
+                    Icon(Icons.delete_forever, color: Colors.red),
+                    SizedBox(width: 8),
+                    Text('Delete All Records', style: TextStyle(color: Colors.red)),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ],
       ),
       body: TabBarView(
@@ -883,7 +1096,7 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
           // Daily Records Tab
           _isLoading
               ? const Center(child: CircularProgressIndicator())
-              : _groupedRecords.isEmpty
+              : ((todayRecords['Staff'] as List?)?.isEmpty ?? true) && ((todayRecords['Worker'] as List?)?.isEmpty ?? true)
                   ? Center(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -895,7 +1108,7 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
                           ),
                           const SizedBox(height: 16),
                           Text(
-                            'No attendance records yet',
+                            'No attendance records for ${_formatSelectedDate()}',
                             style: TextStyle(
                               fontSize: 18,
                               color: Colors.grey[600],
@@ -904,69 +1117,21 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
                         ],
                       ),
                     )
-                  : ListView.builder(
+                  : SingleChildScrollView(
                       padding: const EdgeInsets.all(16.0),
-                      itemCount: sortedDates.length,
-                      itemBuilder: (context, index) {
-                        final date = sortedDates[index];
-                        final roles = _groupedRecords[date]!;
-                        
-                        return Card(
-                          margin: const EdgeInsets.only(bottom: 24.0),
-                          elevation: 3,
-                          child: Padding(
-                            padding: const EdgeInsets.all(16.0),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 12,
-                                          vertical: 8,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: Colors.indigo[700],
-                                          borderRadius: BorderRadius.circular(8),
-                                        ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            const Icon(
-                                              Icons.calendar_today,
-                                              color: Colors.white,
-                                              size: 18,
-                                            ),
-                                            const SizedBox(width: 8),
-                                            Text(
-                                              _formatDate(date),
-                                              style: const TextStyle(
-                                                fontSize: 18,
-                                                fontWeight: FontWeight.bold,
-                                                color: Colors.white,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(Icons.delete, color: Colors.red),
-                                      onPressed: () => _deleteAttendanceForDate(date),
-                                      tooltip: 'Delete this day',
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 16),
-                                _buildRoleTable('Staff', roles['Staff']!),
-                                _buildRoleTable('Worker', roles['Worker']!),
-                              ],
-                            ),
+                      child: Card(
+                        elevation: 3,
+                        child: Padding(
+                          padding: const EdgeInsets.all(16.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _buildRoleTable('Staff', (todayRecords['Staff'] as List<Map<String, dynamic>>?) ?? []),
+                              _buildRoleTable('Worker', (todayRecords['Worker'] as List<Map<String, dynamic>>?) ?? []),
+                            ],
                           ),
-                        );
-                      },
+                        ),
+                      ),
                     ),
           // Monthly View Tab
           Column(
@@ -1048,6 +1213,12 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
                                   style: TextStyle(fontWeight: FontWeight.bold),
                                 ),
                               ),
+                              const DataColumn(
+                                label: Text(
+                                  'Shift',
+                                  style: TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                              ),
                               // Day columns
                               ...List.generate(_daysInMonth, (index) {
                                 return DataColumn(
@@ -1085,6 +1256,7 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
                               final name = person['name'] as String;
                               final role = person['role'] as String;
                               final contractor = person['contractor'] as String?;
+                              final shift = person['shift'] as String? ?? 'Day';
                               final totalPresent = _getTotalPresent(name);
                               final totalAbsent = _getTotalAbsent(name);
                               final attendancePercentage = _getAttendancePercentage(name);
@@ -1119,20 +1291,69 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
                                     ),
                                   ),
                                   DataCell(Text(contractor ?? '-')),
+                                  DataCell(
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: shift == 'Day'
+                                            ? Colors.orange[100]
+                                            : Colors.indigo[100],
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Text(
+                                        shift,
+                                        style: TextStyle(
+                                          color: shift == 'Day'
+                                              ? Colors.orange[900]
+                                              : Colors.indigo[900],
+                                          fontWeight: FontWeight.w500,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
                                   // Day cells
                                   ...List.generate(_daysInMonth, (index) {
                                     final day = index + 1;
                                     final isFutureDate = isCurrentMonth && day > now.day;
-                                    final hasAttendance = _monthlyAttendanceData[name]?[day] ?? false;
+                                    final attendanceStatus = _monthlyAttendanceData[name]?[day];
+                                    String cellText;
+                                    Color cellColor;
+                                    
+                                    if (isFutureDate) {
+                                      cellText = '';
+                                      cellColor = Colors.black;
+                                    } else if (attendanceStatus == true) {
+                                      cellText = 'P';
+                                      cellColor = Colors.green[700]!;
+                                    } else if (attendanceStatus == 'SL') {
+                                      cellText = 'SL';
+                                      cellColor = Colors.orange[700]!;
+                                    } else if (attendanceStatus == 'CL') {
+                                      cellText = 'CL';
+                                      cellColor = Colors.blue[700]!;
+                                    } else {
+                                      cellText = 'A';
+                                      cellColor = Colors.red[700]!;
+                                    }
+                                    
                                     return DataCell(
-                                      Center(
-                                        child: Text(
-                                          isFutureDate ? '' : (hasAttendance ? 'P' : 'A'),
-                                          style: TextStyle(
-                                            color: hasAttendance
-                                                ? Colors.green[700]
-                                                : Colors.red[700],
-                                            fontWeight: FontWeight.bold,
+                                      GestureDetector(
+                                        onLongPress: () {
+                                          if (!isFutureDate && attendanceStatus != true) {
+                                            _showLeaveDialog(name, day);
+                                          }
+                                        },
+                                        child: Center(
+                                          child: Text(
+                                            cellText,
+                                            style: TextStyle(
+                                              color: cellColor,
+                                              fontWeight: FontWeight.bold,
+                                            ),
                                           ),
                                         ),
                                       ),
@@ -1183,5 +1404,151 @@ class _AttendanceTableScreenState extends State<AttendanceTableScreen> with Sing
         ],
       ),
     );
+  }
+
+  void _showLeaveDialog(String name, int day) {
+    final date = DateTime(_selectedMonth.year, _selectedMonth.month, day);
+    final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Mark Leave - $name'),
+        content: Text('Date: ${date.day}/${date.month}/${date.year}'),
+        actions: [
+          TextButton.icon(
+            icon: const Icon(Icons.sick, color: Colors.orange),
+            label: const Text('Sick Leave (SL)'),
+            onPressed: () async {
+              await _databaseService.markLeave(name, dateStr, 'SL');
+              Navigator.pop(context);
+              _loadMonthlyAttendance();
+            },
+          ),
+          TextButton.icon(
+            icon: const Icon(Icons.event_busy, color: Colors.blue),
+            label: const Text('Casual Leave (CL)'),
+            onPressed: () async {
+              await _databaseService.markLeave(name, dateStr, 'CL');
+              Navigator.pop(context);
+              _loadMonthlyAttendance();
+            },
+          ),
+          TextButton.icon(
+            icon: const Icon(Icons.clear, color: Colors.grey),
+            label: const Text('Clear Leave'),
+            onPressed: () async {
+              await _databaseService.clearLeave(name, dateStr);
+              Navigator.pop(context);
+              _loadMonthlyAttendance();
+            },
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmDeleteRecord(String name, String date) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Record'),
+        content: Text('Delete attendance record for $name on ${date.split('-').reversed.join('/')}?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            onPressed: () async {
+              await _deleteAttendanceRecord(name, date);
+              Navigator.pop(context);
+            },
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _deleteAttendanceRecord(String name, String date) async {
+    try {
+      // Delete the specific attendance record
+      await _databaseService.deleteAttendanceRecord(name, date);
+      
+      // Reload data
+      await _loadAttendance();
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Record deleted successfully')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error deleting record: $e')),
+        );
+      }
+    }
+  }
+
+  void _confirmDeleteAllAttendance() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete All Records'),
+        content: const Text(
+          'Are you sure you want to delete ALL attendance records?\n\n'
+          'This action cannot be undone and will remove all attendance data permanently.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.red,
+              backgroundColor: Colors.red.withOpacity(0.1),
+            ),
+            onPressed: () async {
+              Navigator.pop(context);
+              await _deleteAllAttendance();
+            },
+            child: const Text('DELETE ALL', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _deleteAllAttendance() async {
+    try {
+      await _databaseService.deleteAllAttendance();
+      
+      // Reload data
+      await _loadAttendance();
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('All attendance records deleted'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error deleting records: $e')),
+        );
+      }
+    }
   }
 }

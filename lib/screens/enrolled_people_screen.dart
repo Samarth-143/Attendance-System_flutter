@@ -113,6 +113,9 @@ class _EnrolledPeopleScreenState extends State<EnrolledPeopleScreen> {
                       final person = _enrolledPeople[index];
                       final name = person['name'] as String;
                       final id = person['id'] as int;
+                      final role = person['role'] as String? ?? 'Staff';
+                      final contractor = person['contractor'] as String?;
+                      final shift = person['shift'] as String? ?? 'Day';
                       final createdAt = DateTime.parse(person['created_at'] as String);
                       
                       return Card(
@@ -135,12 +138,34 @@ class _EnrolledPeopleScreenState extends State<EnrolledPeopleScreen> {
                               fontSize: 16,
                             ),
                           ),
-                          subtitle: Text(
-                            'Enrolled on ${createdAt.day}/${createdAt.month}/${createdAt.year} at ${createdAt.hour}:${createdAt.minute.toString().padLeft(2, '0')}',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey[600],
-                            ),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Role: $role${contractor != null && contractor.isNotEmpty ? ' | Contractor: $contractor' : ''}',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: Colors.grey[700],
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              Text(
+                                'Shift: $shift',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: shift == 'Night' ? Colors.indigo[700] : Colors.orange[700],
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                'Enrolled on ${createdAt.day}/${createdAt.month}/${createdAt.year} at ${createdAt.hour}:${createdAt.minute.toString().padLeft(2, '0')}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey[600],
+                                ),
+                              ),
+                            ],
                           ),
                           trailing: IconButton(
                             icon: const Icon(Icons.delete, color: Colors.red),

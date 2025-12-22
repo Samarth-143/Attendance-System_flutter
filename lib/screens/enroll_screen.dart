@@ -21,8 +21,11 @@ class _EnrollScreenState extends State<EnrollScreen> {
   String _message = '';
   bool _faceDetected = false;
   int _captureCount = 0;
-  final int _totalCaptures = 5;
+  final int _totalCaptures = 10; // Increased from 5 to 10 for better accuracy
   String _selectedRole = 'Staff';
+  String _selectedShift = 'Day';
+  List<CameraDescription> _cameras = [];
+  bool _isFrontCamera = true;
 
   @override
   void initState() {
@@ -33,20 +36,28 @@ class _EnrollScreenState extends State<EnrollScreen> {
   }
 
   Future<void> _initializeCamera() async {
-    final cameras = await availableCameras();
-    final frontCamera = cameras.firstWhere(
-      (camera) => camera.lensDirection == CameraLensDirection.front,
-      orElse: () => cameras.first,
+    _cameras = await availableCameras();
+    final camera = _cameras.firstWhere(
+      (camera) => camera.lensDirection == (_isFrontCamera ? CameraLensDirection.front : CameraLensDirection.back),
+      orElse: () => _cameras.first,
     );
 
     _cameraController = CameraController(
-      frontCamera,
+      camera,
       ResolutionPreset.medium,
       enableAudio: false,
     );
 
     await _cameraController!.initialize();
-    setState(() {});
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _toggleCamera() async {
+    if (_isProcessing) return;
+    
+    setState(() => _isFrontCamera = !_isFrontCamera);
+    await _cameraController?.dispose();
+    await _initializeCamera();
   }
 
   Future<void> _enrollFace() async {
@@ -94,7 +105,13 @@ class _EnrollScreenState extends State<EnrollScreen> {
         setState(() => _message = 'Processing $_totalCaptures images...');
         final averagedEmbedding = _faceService.averageEmbeddings(embeddings);
         
-        await _databaseService.saveFace(_nameController.text, _selectedRole, averagedEmbedding);
+        await _databaseService.saveFace(
+          _nameController.text,
+          _selectedRole,
+          averagedEmbedding,
+          contractor: _contractorController.text.isEmpty ? null : _contractorController.text,
+          shift: _selectedShift,
+        );
         setState(() => _message = 'Face enrolled successfully with $_totalCaptures images!');
         
         Future.delayed(const Duration(seconds: 2), () {
@@ -143,6 +160,20 @@ class _EnrollScreenState extends State<EnrollScreen> {
                             ),
                           ),
                         ),
+                      Positioned(
+                        top: 20,
+                        right: 20,
+                        child: FloatingActionButton(
+                          heroTag: 'cameraToggle',
+                          mini: true,
+                          onPressed: _toggleCamera,
+                          backgroundColor: Colors.white.withOpacity(0.8),
+                          child: Icon(
+                            _isFrontCamera ? Icons.camera_front : Icons.camera_rear,
+                            color: Colors.black87,
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -172,7 +203,9 @@ class _EnrollScreenState extends State<EnrollScreen> {
                           );
                         }).toList(),
                         onChanged: (value) {
-                          setState(() => _selectedRole = value!);
+                          if (value != null) {
+                            setState(() => _selectedRole = value);
+                          }
                         },
                       ),
                       const SizedBox(height: 10),
@@ -183,6 +216,25 @@ class _EnrollScreenState extends State<EnrollScreen> {
                           border: OutlineInputBorder(),
                           hintText: 'Enter contractor name',
                         ),
+                      ),
+                      const SizedBox(height: 10),
+                      DropdownButtonFormField<String>(
+                        value: _selectedShift,
+                        decoration: const InputDecoration(
+                          labelText: 'Shift',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: ['Day', 'Night'].map((shift) {
+                          return DropdownMenuItem(
+                            value: shift,
+                            child: Text(shift),
+                          );
+                        }).toList(),
+                        onChanged: (value) {
+                          if (value != null) {
+                            setState(() => _selectedShift = value);
+                          }
+                        },
                       ),
                       const SizedBox(height: 10),
                       if (_message.isNotEmpty)
@@ -222,7 +274,7 @@ class _EnrollScreenState extends State<EnrollScreen> {
                           child: _isProcessing
                               ? const CircularProgressIndicator(color: Colors.white)
                               : const Text(
-                                  'Start Enrollment (5 captures)',
+                                  'Start Enrollment (10 captures)',
                                   style: TextStyle(fontSize: 18),
                                 ),
                         ),

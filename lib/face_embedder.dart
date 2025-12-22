@@ -3,31 +3,28 @@ import 'package:image/image.dart' as img;
 import 'dart:math';
 
 class FaceEmbedder {
-  static const int embeddingSize = 128;
+  static const int embeddingSize = 256; // Increased from 128
 
   Future<void> loadModel() async {
-    // No model needed - using facial landmarks instead
-    print('Using facial landmark-based embeddings');
+    // Enhanced landmark-based approach
+    print('Using enhanced facial feature embeddings');
   }
 
   List<double>? getEmbedding(img.Image face) {
-    // Create a simple embedding from image pixel data
-    // This is a basic approach - normalize and reduce image to fixed-size vector
-    final resized = img.copyResize(face, width: 32, height: 32);
-    
+    // Multi-scale feature extraction for better accuracy
     List<double> embedding = [];
     
-    // Extract color histograms (simple feature extraction)
-    for (int y = 0; y < 32; y += 4) {
-      for (int x = 0; x < 32; x += 4) {
-        final pixel = resized.getPixel(x, y);
-        embedding.add((pixel.r / 255.0 - 0.5) * 2);
-        embedding.add((pixel.g / 255.0 - 0.5) * 2);
-        embedding.add((pixel.b / 255.0 - 0.5) * 2);
-      }
+    // 1. Extract features at multiple scales
+    final scales = [32, 48, 64];
+    for (var size in scales) {
+      final resized = img.copyResize(face, width: size, height: size);
+      embedding.addAll(_extractLocalFeatures(resized, size));
     }
     
-    // Normalize the embedding
+    // 2. Add global texture features
+    embedding.addAll(_extractTextureFeatures(face));
+    
+    // 3. Normalize the embedding
     double norm = 0;
     for (var val in embedding) {
       norm += val * val;
@@ -48,6 +45,71 @@ class FaceEmbedder {
     }
     
     return embedding;
+  }
+
+  // Extract local features from small patches
+  List<double> _extractLocalFeatures(img.Image face, int size) {
+    List<double> features = [];
+    final patchSize = size ~/ 4;
+    
+    // Divide face into regions (eyes, nose, mouth areas)
+    for (int py = 0; py < 4; py++) {
+      for (int px = 0; px < 4; px++) {
+        double sumR = 0, sumG = 0, sumB = 0;
+        double sumR2 = 0, sumG2 = 0, sumB2 = 0;
+        int count = 0;
+        
+        // Calculate mean and variance for each patch
+        for (int y = py * patchSize; y < (py + 1) * patchSize && y < size; y++) {
+          for (int x = px * patchSize; x < (px + 1) * patchSize && x < size; x++) {
+            final pixel = face.getPixel(x, y);
+            final r = pixel.r / 255.0;
+            final g = pixel.g / 255.0;
+            final b = pixel.b / 255.0;
+            
+            sumR += r; sumG += g; sumB += b;
+            sumR2 += r * r; sumG2 += g * g; sumB2 += b * b;
+            count++;
+          }
+        }
+        
+        if (count > 0) {
+          // Mean values
+          features.add(sumR / count - 0.5);
+          features.add(sumG / count - 0.5);
+          features.add(sumB / count - 0.5);
+          
+          // Standard deviation (texture info)
+          features.add(sqrt((sumR2 / count) - pow(sumR / count, 2)));
+        }
+      }
+    }
+    
+    return features;
+  }
+
+  // Extract texture features using gradient-like operations
+  List<double> _extractTextureFeatures(img.Image face) {
+    List<double> features = [];
+    final resized = img.copyResize(face, width: 64, height: 64);
+    
+    // Horizontal and vertical gradients for texture
+    for (int y = 1; y < 63; y += 4) {
+      for (int x = 1; x < 63; x += 4) {
+        final center = resized.getPixel(x, y);
+        final right = resized.getPixel(x + 1, y);
+        final down = resized.getPixel(x, y + 1);
+        
+        // Gradient approximation
+        final gradX = (right.r - center.r) / 255.0;
+        final gradY = (down.r - center.r) / 255.0;
+        
+        features.add(gradX);
+        features.add(gradY);
+      }
+    }
+    
+    return features;
   }
 
   void dispose() {

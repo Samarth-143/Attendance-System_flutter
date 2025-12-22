@@ -36,7 +36,7 @@ class HomeScreen extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const Icon(
-                Icons.face,
+                Icons.emoji_emotions,
                 size: 100,
                 color: Colors.blue,
               ),
