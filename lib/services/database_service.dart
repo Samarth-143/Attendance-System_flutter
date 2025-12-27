@@ -176,8 +176,7 @@ class DatabaseService {
   Future<String> recordAttendance(String name, String role) async {
     final now = DateTime.now();
     final timestamp = now.toIso8601String();
-    final currentHour = now.hour;
-    
+
     // Get person's shift from faces table
     final face = await _database!.query(
       'faces',
@@ -185,98 +184,79 @@ class DatabaseService {
       whereArgs: [name],
       limit: 1,
     );
-    
     if (face.isEmpty) {
       return 'ERROR';
     }
-    
     final shift = face.first['shift'] as String? ?? 'Day';
-    
-    // Determine date and IN/OUT based on shift and time
-    String attendanceDate;
-    bool isInTime;
-    
-    if (shift == 'Day') {
-      // Day shift: Simple - same calendar day
-      attendanceDate = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-      // Before 4 PM (16:00) = IN, After 4 PM = OUT
-      isInTime = currentHour < 16;
-    } else {
-      // Night shift: Complex - spans two calendar days
-      // Logic: 
-      // - 2 PM to midnight (14:00-23:59) = IN time for current date
-      // - Midnight to 2 PM (00:00-13:59) = OUT time for previous date
-      
-      if (currentHour >= 14) {
-        // Afternoon/Evening (2 PM onwards) - This is IN time for today
-        attendanceDate = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-        isInTime = true;
-      } else {
-        // Morning (before 2 PM) - This is OUT time for yesterday's shift
-        final yesterday = now.subtract(const Duration(days: 1));
-        attendanceDate = '${yesterday.year}-${yesterday.month.toString().padLeft(2, '0')}-${yesterday.day.toString().padLeft(2, '0')}';
-        isInTime = false;
-      }
+
+    // For both shifts, always use the current date for in-time, but for night shift, allow out-time on next day
+    String attendanceDate = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    // For night shift, if time is before 2 PM, check yesterday's record for out-time
+    String prevDate = '';
+    if (shift == 'Night' && now.hour < 14) {
+      final yesterday = now.subtract(const Duration(days: 1));
+      prevDate = '${yesterday.year}-${yesterday.month.toString().padLeft(2, '0')}-${yesterday.day.toString().padLeft(2, '0')}';
     }
-    
-    // Check if there's already an attendance record for the determined date
-    final existing = await _database!.query(
+
+    // Try to find today's record
+    var existing = await _database!.query(
       'attendance',
       where: 'name = ? AND date = ?',
       whereArgs: [name, attendanceDate],
     );
-    
+
+    // For night shift, if before 2 PM and no record today, check yesterday for out-time
+    if (shift == 'Night' && now.hour < 14 && existing.isEmpty && prevDate.isNotEmpty) {
+      existing = await _database!.query(
+        'attendance',
+        where: 'name = ? AND date = ?',
+        whereArgs: [name, prevDate],
+      );
+      attendanceDate = prevDate;
+    }
+
     if (existing.isEmpty) {
-      // No record for this date - create new one
-      if (isInTime) {
-        await _database!.insert('attendance', {
-          'name': name,
-          'date': attendanceDate,
-          'in_time': timestamp,
-          'out_time': null,
-          'timestamp': timestamp,
-        });
-        return 'IN';
-      } else {
-        await _database!.insert('attendance', {
-          'name': name,
-          'date': attendanceDate,
-          'in_time': null,
-          'out_time': timestamp,
-          'timestamp': timestamp,
-        });
-        return 'OUT';
-      }
+      // No record for this date - create new one with in_time
+      await _database!.insert('attendance', {
+        'name': name,
+        'date': attendanceDate,
+        'in_time': timestamp,
+        'out_time': null,
+        'timestamp': timestamp,
+      });
+      return 'IN';
     } else {
       // Record exists for this date
       final record = existing.first;
-      
-      if (isInTime) {
-        // Trying to mark IN time
-        if (record['in_time'] == null) {
-          await _database!.update(
-            'attendance',
-            {'in_time': timestamp},
-            where: 'id = ?',
-            whereArgs: [record['id']],
-          );
-          return 'IN';
-        } else {
-          return 'IN_ALREADY_MARKED';
+      final inTimeStr = record['in_time'] as String?;
+      final outTimeStr = record['out_time'] as String?;
+
+      if (inTimeStr == null) {
+        // No in-time yet, set it
+        await _database!.update(
+          'attendance',
+          {'in_time': timestamp},
+          where: 'id = ?',
+          whereArgs: [record['id']],
+        );
+        return 'IN';
+      } else if (outTimeStr == null) {
+        // in_time exists, check if at least 30 min have passed
+        final inTime = DateTime.parse(inTimeStr);
+        final diff = now.difference(inTime).inMinutes;
+        if (diff < 30) {
+          return 'OUT_TOO_SOON';
         }
+        await _database!.update(
+          'attendance',
+          {'out_time': timestamp},
+          where: 'id = ?',
+          whereArgs: [record['id']],
+        );
+        return 'OUT';
       } else {
-        // Trying to mark OUT time
-        if (record['out_time'] == null) {
-          await _database!.update(
-            'attendance',
-            {'out_time': timestamp},
-            where: 'id = ?',
-            whereArgs: [record['id']],
-          );
-          return 'OUT';
-        } else {
-          return 'OUT_ALREADY_MARKED';
-        }
+        // Both in and out already marked
+        return outTimeStr == null ? 'IN_ALREADY_MARKED' : 'OUT_ALREADY_MARKED';
       }
     }
   }
